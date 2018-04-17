@@ -136,13 +136,11 @@ def test_frozen_trie_using_fixtures(fixture_name, fixture):
                 delta = trie.delete(key)
             else:
                 delta = trie.set(key, value)
-            delta.apply(db)
-            trie = trie.after(delta)
+            trie = trie.write_to_db(delta, db)
 
         for key in deletes:
             delta = trie.delete(key)
-            delta.apply(db)
-            trie = trie.after(delta)
+            trie = trie.write_to_db(delta, db)
 
         for key, expected_value in remaining.items():
             assert key in trie

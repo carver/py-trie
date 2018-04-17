@@ -211,12 +211,21 @@ class FrozenHexaryTrie:
         else:
             raise Exception("Invariant: This shouldn't ever happen")
 
-    def after(self, trie_delta):
+    def write_to_db(self, trie_delta, db):
         '''
-        Note that this method does *not* commit any trie_delta changes
-        to the database.
+        Writes out changes in the delta to the database
         '''
-        return (type(self))(db=self._read_db, root_hash=trie_delta.root_hash)
+        if trie_delta.old_root_hash != self.root_hash:
+            raise ValueError("the delta's starting root hash must match this trie's root hash")
+
+        trie_delta.apply(db)
+        return cls(db=db, root_hash=trie_delta.root_hash)
+
+    def apply_in_memory(self, trie_delta):
+        '''
+        Creates a version of the trie that has an updated view, without writing changes to DB
+        '''
+        return self.write_to_db(trie_delta, ScratchDB(self._read_db))
 
     def set(self, key, value):
         return self._store_key(key, value)
