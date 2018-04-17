@@ -91,17 +91,23 @@ class ScratchDB(Mapping):
 
 
 class TrieDelta:
-    __slots__ = '_new_root_hash', '_updates'
+    __slots__ = '_old_root_hash', '_new_root_hash', '_updates'
 
-    def __init__(self, new_root_hash, updates=None):
+    def __init__(self, old_root_hash, new_root_hash, updates):
         '''
         :param dict updates: new key->value mappings, deletions with key->DELETED
         '''
-        if updates is None:
-            self._updates = {}
-        else:
-            self._updates = dict(updates)
+        self._updates = dict(updates)
         self._new_root_hash = new_root_hash
+        self._old_root_hash = old_root_hash
+
+    @property
+    def old_root_hash(self):
+        return self._old_root_hash
+
+    @property
+    def new_root_hash(self):
+        return self._new_root_hash
 
     @property
     def root_hash(self):
@@ -119,21 +125,44 @@ class TrieDelta:
         return iter(self._updates)
 
     @classmethod
-    def join(cls, deltas, starting_root=None):
+    def new_empty(cls, at_root_hash):
+        return cls(at_root_hash, at_root_hash, {})
+
+    @classmethod
+    def join(cls, deltas, *, starting_root=None):
         if deltas is None:
             raise TypeError('must provide an iterable of deltas to join')
         else:
-            joint_changes = {}
-            root_hash = starting_root
-            for delta in deltas:
-                joint_changes.update(delta._updates)
-                root_hash = delta.root_hash
-            if root_hash is None:
-                raise ValueError(
-                    'You must either supply a non-empty list of changes, '
-                    'or provide a starting root hash.'
+            deltas_iter = iter(deltas)
+            try:
+                first_delta = next(deltas_iter)
+            except StopIteration:
+                if starting_root is None:
+                    raise ValueError(
+                        'You must either supply a non-empty list of changes, '
+                        'or provide a starting root hash.'
+                    )
+                else:
+                    return cls.new_empty(at_root_hash)
+
+            if starting_root is not None and starting_root != first_delta.old_root_hash:
+                assert ValueError(
+                    "The starting_root (if supplied) must equal the first delta's old_root_hash"
                 )
-            return cls(root_hash, joint_changes)
+            else:
+                old_root_hash = first_delta.old_root_hash
+                last_root_hash = first_delta.new_root_hash
+                joint_changes = first_delta.changes
+
+            for delta in deltas_iter:
+                if delta.old_root_hash != last_root_hash:
+                    raise ValueError(
+                        "TrieDeltas must be applied in order, so that the new root hash of the "
+                        "first delta matches the old root hash of the second delta."
+                    )
+                joint_changes.update(delta._updates)
+                last_root_hash = delta.new_root_hash
+            return cls(old_root_hash, last_root_hash, joint_changes)
 
     def apply(self, db):
         for key, value in self._updates.items():
@@ -241,7 +270,7 @@ class FrozenHexaryTrie:
     def _scratch_delta(self, root_delta):
         db_changes = merge(self._scratch_db.changes, root_delta.changes)
         self._scratch_db = None
-        return TrieDelta(root_delta.root_hash, db_changes)
+        return TrieDelta(self.root_hash, root_delta.root_hash, db_changes)
 
     def _delete(self, node, trie_key):
         node_type = get_node_type(node)
@@ -288,7 +317,7 @@ class FrozenHexaryTrie:
         validate_is_node(root_node)
         encoded_root_node = encode_raw(root_node)
         new_root_hash = keccak(encoded_root_node)
-        return TrieDelta(new_root_hash, {new_root_hash: encoded_root_node})
+        return TrieDelta(self.root_hash, new_root_hash, {new_root_hash: encoded_root_node})
 
     def get_node(self, node_hash):
         return self._get_node(node_hash, self._read_db)
